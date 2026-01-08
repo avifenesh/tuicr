@@ -56,8 +56,9 @@ pub struct FileListState {
 #[derive(Debug, Default)]
 pub struct DiffState {
     pub scroll_offset: usize,
-    pub cursor_line: usize,
+    pub cursor_line: usize, // Absolute position in the line list
     pub current_file_idx: usize,
+    pub viewport_height: usize, // Set during render
 }
 
 impl App {
@@ -141,14 +142,52 @@ impl App {
         self.message = None;
     }
 
+    pub fn cursor_down(&mut self, lines: usize) {
+        let max_line = self.total_lines().saturating_sub(1);
+        self.diff_state.cursor_line = (self.diff_state.cursor_line + lines).min(max_line);
+        self.ensure_cursor_visible();
+        self.update_current_file_from_cursor();
+    }
+
+    pub fn cursor_up(&mut self, lines: usize) {
+        self.diff_state.cursor_line = self.diff_state.cursor_line.saturating_sub(lines);
+        self.ensure_cursor_visible();
+        self.update_current_file_from_cursor();
+    }
+
     pub fn scroll_down(&mut self, lines: usize) {
-        self.diff_state.scroll_offset = self.diff_state.scroll_offset.saturating_add(lines);
-        self.update_current_file_from_scroll();
+        // For half-page/page scrolling, move both cursor and scroll
+        let max_line = self.total_lines().saturating_sub(1);
+        self.diff_state.cursor_line = (self.diff_state.cursor_line + lines).min(max_line);
+        self.diff_state.scroll_offset = (self.diff_state.scroll_offset + lines).min(max_line);
+        self.ensure_cursor_visible();
+        self.update_current_file_from_cursor();
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
+        // For half-page/page scrolling, move both cursor and scroll
+        self.diff_state.cursor_line = self.diff_state.cursor_line.saturating_sub(lines);
         self.diff_state.scroll_offset = self.diff_state.scroll_offset.saturating_sub(lines);
-        self.update_current_file_from_scroll();
+        self.ensure_cursor_visible();
+        self.update_current_file_from_cursor();
+    }
+
+    fn ensure_cursor_visible(&mut self) {
+        let viewport = self.diff_state.viewport_height.max(1);
+        // If cursor is above the viewport, scroll up
+        if self.diff_state.cursor_line < self.diff_state.scroll_offset {
+            self.diff_state.scroll_offset = self.diff_state.cursor_line;
+        }
+        // If cursor is below the viewport, scroll down
+        if self.diff_state.cursor_line >= self.diff_state.scroll_offset + viewport {
+            self.diff_state.scroll_offset = self.diff_state.cursor_line - viewport + 1;
+        }
+    }
+
+    pub fn center_cursor(&mut self) {
+        let viewport = self.diff_state.viewport_height.max(1);
+        let half_viewport = viewport / 2;
+        self.diff_state.scroll_offset = self.diff_state.cursor_line.saturating_sub(half_viewport);
     }
 
     pub fn file_list_down(&mut self, n: usize) {
@@ -165,7 +204,8 @@ impl App {
     pub fn jump_to_file(&mut self, idx: usize) {
         if idx < self.diff_files.len() {
             self.diff_state.current_file_idx = idx;
-            self.diff_state.scroll_offset = self.calculate_file_scroll_offset(idx);
+            self.diff_state.cursor_line = self.calculate_file_scroll_offset(idx);
+            self.diff_state.scroll_offset = self.diff_state.cursor_line;
             self.file_list_state.selected = idx;
         }
     }
@@ -182,7 +222,7 @@ impl App {
     }
 
     pub fn next_hunk(&mut self) {
-        // Find the next hunk header position after current scroll
+        // Find the next hunk header position after current cursor
         let mut cumulative = 0;
         for file in &self.diff_files {
             // File header
@@ -197,9 +237,10 @@ impl App {
             } else {
                 for hunk in &file.hunks {
                     // This is a hunk header position
-                    if cumulative > self.diff_state.scroll_offset {
-                        self.diff_state.scroll_offset = cumulative;
-                        self.update_current_file_from_scroll();
+                    if cumulative > self.diff_state.cursor_line {
+                        self.diff_state.cursor_line = cumulative;
+                        self.ensure_cursor_visible();
+                        self.update_current_file_from_cursor();
                         return;
                     }
                     cumulative += 1; // hunk header
@@ -211,7 +252,7 @@ impl App {
     }
 
     pub fn prev_hunk(&mut self) {
-        // Find the previous hunk header position before current scroll
+        // Find the previous hunk header position before current cursor
         let mut hunk_positions: Vec<usize> = Vec::new();
         let mut cumulative = 0;
 
@@ -233,18 +274,20 @@ impl App {
             cumulative += 1;
         }
 
-        // Find the last hunk position before current scroll
+        // Find the last hunk position before current cursor
         for &pos in hunk_positions.iter().rev() {
-            if pos < self.diff_state.scroll_offset {
-                self.diff_state.scroll_offset = pos;
-                self.update_current_file_from_scroll();
+            if pos < self.diff_state.cursor_line {
+                self.diff_state.cursor_line = pos;
+                self.ensure_cursor_visible();
+                self.update_current_file_from_cursor();
                 return;
             }
         }
 
         // If no previous hunk, go to start
-        self.diff_state.scroll_offset = 0;
-        self.update_current_file_from_scroll();
+        self.diff_state.cursor_line = 0;
+        self.ensure_cursor_visible();
+        self.update_current_file_from_cursor();
     }
 
     fn calculate_file_scroll_offset(&self, file_idx: usize) -> usize {
@@ -264,11 +307,11 @@ impl App {
         header_lines + content_lines.max(1)
     }
 
-    fn update_current_file_from_scroll(&mut self) {
+    fn update_current_file_from_cursor(&mut self) {
         let mut cumulative = 0;
         for (i, file) in self.diff_files.iter().enumerate() {
             let height = self.file_render_height(file);
-            if cumulative + height > self.diff_state.scroll_offset {
+            if cumulative + height > self.diff_state.cursor_line {
                 self.diff_state.current_file_idx = i;
                 self.file_list_state.selected = i;
                 return;
@@ -279,6 +322,13 @@ impl App {
             self.diff_state.current_file_idx = self.diff_files.len() - 1;
             self.file_list_state.selected = self.diff_files.len() - 1;
         }
+    }
+
+    pub fn total_lines(&self) -> usize {
+        self.diff_files
+            .iter()
+            .map(|f| self.file_render_height(f))
+            .sum()
     }
 
     pub fn enter_command_mode(&mut self) {

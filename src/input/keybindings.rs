@@ -5,8 +5,8 @@ use crate::app::InputMode;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     // Navigation
-    ScrollDown(usize),
-    ScrollUp(usize),
+    CursorDown(usize),
+    CursorUp(usize),
     HalfPageDown,
     HalfPageUp,
     PageDown,
@@ -17,6 +17,8 @@ pub enum Action {
     PrevFile,
     NextHunk,
     PrevHunk,
+    CenterView,
+    PendingZCommand,
 
     // Panel focus
     FocusFileList,
@@ -71,15 +73,16 @@ pub fn map_key_to_action(key: KeyEvent, mode: InputMode) -> Action {
 
 fn map_normal_mode(key: KeyEvent) -> Action {
     match (key.code, key.modifiers) {
-        // Scrolling
-        (KeyCode::Char('j') | KeyCode::Down, KeyModifiers::NONE) => Action::ScrollDown(1),
-        (KeyCode::Char('k') | KeyCode::Up, KeyModifiers::NONE) => Action::ScrollUp(1),
+        // Cursor movement (vim-like: cursor moves, scroll follows when needed)
+        (KeyCode::Char('j') | KeyCode::Down, KeyModifiers::NONE) => Action::CursorDown(1),
+        (KeyCode::Char('k') | KeyCode::Up, KeyModifiers::NONE) => Action::CursorUp(1),
         (KeyCode::Char('d'), KeyModifiers::CONTROL) => Action::HalfPageDown,
         (KeyCode::Char('u'), KeyModifiers::CONTROL) => Action::HalfPageUp,
         (KeyCode::Char('f'), KeyModifiers::CONTROL) => Action::PageDown,
         (KeyCode::Char('b'), KeyModifiers::CONTROL) => Action::PageUp,
         (KeyCode::Char('g'), KeyModifiers::NONE) => Action::GoToTop,
         (KeyCode::Char('G'), _) => Action::GoToBottom,
+        (KeyCode::Char('z'), KeyModifiers::NONE) => Action::PendingZCommand,
 
         // File navigation (use _ for modifiers since shift is implicit in the character)
         (KeyCode::Char('}'), _) => Action::NextFile,

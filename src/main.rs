@@ -49,34 +49,53 @@ fn main() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // Track pending z command for zz centering
+    let mut pending_z = false;
+
     // Main loop
     loop {
         // Render
         terminal.draw(|frame| {
-            ui::render(frame, &app);
+            ui::render(frame, &mut app);
         })?;
 
         // Handle events
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
+                // Handle pending z command for zz centering
+                if pending_z {
+                    pending_z = false;
+                    if key.code == crossterm::event::KeyCode::Char('z') {
+                        app.center_cursor();
+                        continue;
+                    }
+                    // Otherwise fall through to normal handling
+                }
+
                 let action = map_key_to_action(key, app.input_mode);
 
                 match action {
                     Action::Quit => {
                         app.should_quit = true;
                     }
-                    Action::ScrollDown(n) => match app.focused_panel {
+                    Action::CursorDown(n) => match app.focused_panel {
                         app::FocusedPanel::FileList => app.file_list_down(n),
-                        app::FocusedPanel::Diff => app.scroll_down(n),
+                        app::FocusedPanel::Diff => app.cursor_down(n),
                     },
-                    Action::ScrollUp(n) => match app.focused_panel {
+                    Action::CursorUp(n) => match app.focused_panel {
                         app::FocusedPanel::FileList => app.file_list_up(n),
-                        app::FocusedPanel::Diff => app.scroll_up(n),
+                        app::FocusedPanel::Diff => app.cursor_up(n),
                     },
                     Action::HalfPageDown => app.scroll_down(15),
                     Action::HalfPageUp => app.scroll_up(15),
                     Action::PageDown => app.scroll_down(30),
                     Action::PageUp => app.scroll_up(30),
+                    Action::PendingZCommand => {
+                        pending_z = true;
+                    }
+                    Action::CenterView => {
+                        app.center_cursor();
+                    }
                     Action::GoToTop => app.jump_to_file(0),
                     Action::GoToBottom => {
                         let last = app.file_count().saturating_sub(1);

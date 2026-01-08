@@ -121,3 +121,7 @@ pub fn file_status_style(status: char) -> Style {
     };
     Style::default().fg(color)
 }
+
+pub fn current_line_indicator_style() -> Style {
+    Style::default().fg(BORDER_FOCUSED)
+}
