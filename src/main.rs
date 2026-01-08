@@ -65,8 +65,14 @@ fn main() -> anyhow::Result<()> {
                     Action::Quit => {
                         app.should_quit = true;
                     }
-                    Action::ScrollDown(n) => app.scroll_down(n),
-                    Action::ScrollUp(n) => app.scroll_up(n),
+                    Action::ScrollDown(n) => match app.focused_panel {
+                        app::FocusedPanel::FileList => app.file_list_down(n),
+                        app::FocusedPanel::Diff => app.scroll_down(n),
+                    },
+                    Action::ScrollUp(n) => match app.focused_panel {
+                        app::FocusedPanel::FileList => app.file_list_up(n),
+                        app::FocusedPanel::Diff => app.scroll_up(n),
+                    },
                     Action::HalfPageDown => app.scroll_down(15),
                     Action::HalfPageUp => app.scroll_up(15),
                     Action::PageDown => app.scroll_down(30),

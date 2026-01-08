@@ -151,6 +151,17 @@ impl App {
         self.update_current_file_from_scroll();
     }
 
+    pub fn file_list_down(&mut self, n: usize) {
+        let max_idx = self.diff_files.len().saturating_sub(1);
+        let new_idx = (self.file_list_state.selected + n).min(max_idx);
+        self.jump_to_file(new_idx);
+    }
+
+    pub fn file_list_up(&mut self, n: usize) {
+        let new_idx = self.file_list_state.selected.saturating_sub(n);
+        self.jump_to_file(new_idx);
+    }
+
     pub fn jump_to_file(&mut self, idx: usize) {
         if idx < self.diff_files.len() {
             self.diff_state.current_file_idx = idx;
