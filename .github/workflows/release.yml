@@ -151,16 +151,12 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            use_cross: true
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: true
+            os: ubuntu-24.04-arm
           - target: aarch64-apple-darwin
             os: macos-latest
-            use_cross: false
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            use_cross: false
 
     steps:
       - uses: actions/checkout@v4
@@ -169,37 +165,31 @@ jobs:
 
       - name: Set version
         id: version
+        shell: bash
         run: echo "version=${{ needs.publish.outputs.version || github.event.inputs.version }}" >> $GITHUB_OUTPUT
 
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
-      - name: Install cross
-        if: matrix.use_cross
-        uses: taiki-e/install-action@cross
-
-      - name: Build with cross
-        if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }}
-
-      - name: Build native
-        if: "!matrix.use_cross"
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release
 
       - name: Package binary (unix)
-        if: matrix.os != 'windows-latest'
+        if: runner.os != 'Windows'
         run: |
-          cd target/${{ matrix.target }}/release
-          tar -czvf ../../../tuicr-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz tuicr
-          cd ../../..
+          cd target/release
+          tar -czvf ../../tuicr-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz tuicr
 
       - name: Package binary (windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         run: |
-          cd target/${{ matrix.target }}/release
-          7z a ../../../tuicr-${{ steps.version.outputs.version }}-${{ matrix.target }}.zip tuicr.exe
-          cd ../../..
+          cd target/release
+          7z a ../../tuicr-${{ steps.version.outputs.version }}-${{ matrix.target }}.zip tuicr.exe
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
