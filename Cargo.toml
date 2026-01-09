@@ -2,8 +2,13 @@
 name = "tuicr"
 version = "0.1.0"
 edition = "2024"
-description = "Terminal UI for Code Reviews - review changes made by coding agents"
+description = "Review AI-generated diffs like a GitHub pull request, right from your terminal."
 license = "MIT"
+repository = "https://github.com/agavra/tuicr"
+homepage = "https://github.com/agavra/tuicr"
+readme = "README.md"
+keywords = ["tui", "git", "code-review", "diff", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 # TUI framework

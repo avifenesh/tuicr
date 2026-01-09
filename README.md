@@ -35,11 +35,14 @@ to clipboard in a format ready to paste back to the agent.
 ## Installation
 
 ```bash
-# Clone the repository
+cargo install tuicr
+```
+
+Or build from source:
+
+```bash
 git clone https://github.com/agavra/tuicr.git
 cd tuicr
-
-# Build and install
 cargo install --path .
 ```
 
