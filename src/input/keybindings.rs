@@ -76,6 +76,7 @@ pub enum Action {
     CommitSelectDown,
     ToggleCommitSelect,
     ConfirmCommitSelect,
+    EnterCommitSelectMode,
 
     ToggleExpand,
     ExpandAll,
@@ -143,6 +144,7 @@ fn map_normal_mode(key: KeyEvent) -> Action {
         (KeyCode::Char(':'), _) => Action::EnterCommandMode,
         (KeyCode::Char('/'), _) => Action::EnterSearchMode,
         (KeyCode::Char('?'), _) => Action::ToggleHelp,
+        (KeyCode::Char('m'), KeyModifiers::NONE) => Action::EnterCommitSelectMode,
         (KeyCode::Esc, KeyModifiers::NONE) => Action::ExitMode,
 
         // Quick quit
