@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::error::{Result, TuicrError};
-use crate::model::{Comment, CommentType, DiffFile, DiffLine, LineRange, LineSide, ReviewSession};
-use crate::persistence::{find_session_for_repo, load_session};
+use crate::model::{Comment, CommentType, DiffFile, DiffLine, LineRange, LineSide, ReviewSession, SessionDiffSource};
+use crate::persistence::load_latest_session_for_context;
 use crate::theme::Theme;
 use crate::vcs::git::calculate_gap;
 use crate::vcs::{CommitInfo, VcsBackend, VcsInfo, detect_vcs};
@@ -326,7 +326,18 @@ impl App {
                 }
 
                 let session =
+<<<<<<< HEAD
                     ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone());
+||||||| parent of acd5ca5 (feat: add multi-session and multi-repo support with performance optimizations)
+                    ReviewSession::new(repo_info.root_path.clone(), repo_info.head_commit.clone());
+=======
+                    ReviewSession::new(
+                        repo_info.root_path.clone(),
+                        repo_info.head_commit.clone(),
+                        repo_info.branch_name.clone(),
+                        SessionDiffSource::WorkingTree,
+                    );
+>>>>>>> acd5ca5 (feat: add multi-session and multi-repo support with performance optimizations)
 
                 Ok(Self {
                     theme,
@@ -376,6 +387,7 @@ impl App {
         }
     }
 
+<<<<<<< HEAD
     fn load_or_create_session(vcs_info: &VcsInfo) -> ReviewSession {
         match find_session_for_repo(&vcs_info.root_path) {
             Ok(Some(path)) => match load_session(&path) {
@@ -393,7 +405,68 @@ impl App {
                 }
             },
             _ => ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone()),
+||||||| parent of acd5ca5 (feat: add multi-session and multi-repo support with performance optimizations)
+    fn load_or_create_session(repo_info: &RepoInfo) -> ReviewSession {
+        match find_session_for_repo(&repo_info.root_path) {
+            Ok(Some(path)) => match load_session(&path) {
+                Ok(s) => {
+                    // Delete stale session file if base commit doesn't match
+                    if s.base_commit != repo_info.head_commit {
+                        let _ = std::fs::remove_file(&path);
+                        ReviewSession::new(
+                            repo_info.root_path.clone(),
+                            repo_info.head_commit.clone(),
+                        )
+                    } else {
+                        s
+                    }
+                }
+                Err(_) => {
+                    ReviewSession::new(repo_info.root_path.clone(), repo_info.head_commit.clone())
+                }
+            },
+            _ => ReviewSession::new(repo_info.root_path.clone(), repo_info.head_commit.clone()),
+=======
+    fn load_or_create_session(repo_info: &RepoInfo) -> ReviewSession {
+        let new_session = || {
+            ReviewSession::new(
+                repo_info.root_path.clone(),
+                repo_info.head_commit.clone(),
+                repo_info.branch_name.clone(),
+                SessionDiffSource::WorkingTree,
+            )
+        };
+
+        let Ok(found) = load_latest_session_for_context(
+            &repo_info.root_path,
+            repo_info.branch_name.as_deref(),
+            &repo_info.head_commit,
+            SessionDiffSource::WorkingTree,
+        ) else {
+            return new_session();
+        };
+
+        let Some((_path, mut session)) = found else {
+            return new_session();
+        };
+
+        let mut updated = false;
+        if session.branch_name.is_none() && repo_info.branch_name.is_some() {
+            session.branch_name = repo_info.branch_name.clone();
+            updated = true;
+>>>>>>> acd5ca5 (feat: add multi-session and multi-repo support with performance optimizations)
         }
+
+        if repo_info.branch_name.is_some() && session.base_commit != repo_info.head_commit {
+            session.base_commit = repo_info.head_commit.clone();
+            updated = true;
+        }
+
+        if updated {
+            session.updated_at = chrono::Utc::now();
+        }
+
+        session
     }
 
     pub fn reload_diff_files(&mut self) -> Result<usize> {
@@ -1735,8 +1808,19 @@ impl App {
 
         // Update session with the newest commit as base
         let newest_commit_id = selected_ids.last().unwrap().clone();
+<<<<<<< HEAD
         self.session =
             ReviewSession::new(self.vcs_info.root_path.clone(), newest_commit_id.clone());
+||||||| parent of acd5ca5 (feat: add multi-session and multi-repo support with performance optimizations)
+        self.session = ReviewSession::new(self.repo_info.root_path.clone(), newest_commit_id);
+=======
+        self.session = ReviewSession::new(
+            self.repo_info.root_path.clone(),
+            newest_commit_id,
+            self.repo_info.branch_name.clone(),
+            SessionDiffSource::CommitRange,
+        );
+>>>>>>> acd5ca5 (feat: add multi-session and multi-repo support with performance optimizations)
 
         // Add files to session
         for file in &diff_files {

@@ -1,11 +1,55 @@
 use directories::ProjectDirs;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use crate::error::{Result, TuicrError};
 use crate::model::ReviewSession;
+use crate::model::review::SessionDiffSource;
+
+#[derive(Debug, Clone)]
+struct CachedSession {
+    repo_path: String,
+    branch_name: Option<String>,
+    diff_source: SessionDiffSource,
+    session_path: PathBuf,
+    session: ReviewSession,
+}
+
+static SESSION_CACHE: OnceLock<Mutex<Option<CachedSession>>> = OnceLock::new();
+
+struct SessionFilenameParts {
+    repo_fingerprint: String,
+    diff_source: String,
+}
+
+fn parse_session_filename(filename: &str) -> Option<SessionFilenameParts> {
+    let stem = filename.strip_suffix(".json")?;
+    let parts: Vec<&str> = stem.split('_').collect();
+
+    if parts.len() < 6 {
+        return None;
+    }
+
+    Some(SessionFilenameParts {
+        repo_fingerprint: parts[1].to_string(),
+        diff_source: parts[3].to_string(),
+    })
+}
 
 fn get_reviews_dir() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("TUICR_REVIEWS_DIR") {
+        let dir = PathBuf::from(dir);
+        if dir.as_os_str().is_empty() {
+            return Err(TuicrError::Io(std::io::Error::other(
+                "TUICR_REVIEWS_DIR is empty",
+            )));
+        }
+        fs::create_dir_all(&dir)?;
+        return Ok(dir);
+    }
+
     let proj_dirs = ProjectDirs::from("", "", "tuicr").ok_or_else(|| {
         TuicrError::Io(std::io::Error::other("Could not determine data directory"))
     })?;
@@ -15,6 +59,56 @@ fn get_reviews_dir() -> Result<PathBuf> {
     Ok(data_dir)
 }
 
+const MAX_FILENAME_COMPONENT_LEN: usize = 64;
+
+fn sanitize_filename_component(value: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len().min(MAX_FILENAME_COMPONENT_LEN));
+    for ch in value.chars() {
+        if sanitized.len() >= MAX_FILENAME_COMPONENT_LEN {
+            break;
+        }
+        let ok = ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.');
+        sanitized.push(if ok { ch } else { '-' });
+    }
+
+    let sanitized = sanitized.trim_matches('-');
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized.to_string()
+    }
+}
+
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+
+    let mut hash = OFFSET_BASIS;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
+}
+
+fn repo_path_fingerprint(repo_path: &Path) -> String {
+    let normalized = normalize_repo_path(repo_path);
+    let hash = fnv1a_64(normalized.as_bytes());
+    let hex = format!("{hash:016x}");
+    hex[..8].to_string()
+}
+
+fn normalize_repo_path(repo_path: &Path) -> String {
+    let canonical = fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf());
+    let normalized = canonical.to_string_lossy().to_string();
+
+    if cfg!(windows) {
+        normalized.to_lowercase()
+    } else {
+        normalized
+    }
+}
+
 fn session_filename(session: &ReviewSession) -> String {
     let repo_name = session
         .repo_path
@@ -22,15 +116,24 @@ fn session_filename(session: &ReviewSession) -> String {
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
 
-    let short_commit = if session.base_commit.len() >= 7 {
-        &session.base_commit[..7]
-    } else {
-        &session.base_commit
+    let repo_name = sanitize_filename_component(repo_name);
+    let repo_fingerprint = repo_path_fingerprint(&session.repo_path);
+
+    let branch = session.branch_name.as_deref().unwrap_or("detached");
+    let branch = sanitize_filename_component(branch);
+
+    let diff_source = match session.diff_source {
+        SessionDiffSource::WorkingTree => "worktree",
+        SessionDiffSource::CommitRange => "commits",
     };
 
     let timestamp = session.created_at.format("%Y%m%d_%H%M%S");
+    let id_fragment = session.id.split('-').next().unwrap_or(&session.id);
 
-    format!("{repo_name}_{short_commit}_{timestamp}.json")
+    format!(
+        "{}_{}_{}_{}_{}_{}.json",
+        repo_name, repo_fingerprint, branch, diff_source, timestamp, id_fragment
+    )
 }
 
 pub fn save_session(session: &ReviewSession) -> Result<PathBuf> {
@@ -40,6 +143,10 @@ pub fn save_session(session: &ReviewSession) -> Result<PathBuf> {
 
     let json = serde_json::to_string_pretty(session)?;
     fs::write(&path, json)?;
+
+    if let Ok(mut cache) = SESSION_CACHE.get_or_init(|| Mutex::new(None)).lock() {
+        *cache = None;
+    }
 
     Ok(path)
 }
@@ -51,28 +158,138 @@ pub fn load_session(path: &PathBuf) -> Result<ReviewSession> {
     Ok(session)
 }
 
-pub fn find_session_for_repo(repo_path: &Path) -> Result<Option<PathBuf>> {
+pub fn load_latest_session_for_context(
+    repo_path: &Path,
+    branch_name: Option<&str>,
+    head_commit: &str,
+    diff_source: SessionDiffSource,
+) -> Result<Option<(PathBuf, ReviewSession)>> {
+    let current_repo_path = normalize_repo_path(repo_path);
+    let current_fingerprint = repo_path_fingerprint(repo_path);
+    let current_diff_source = match diff_source {
+        SessionDiffSource::WorkingTree => "worktree",
+        SessionDiffSource::CommitRange => "commits",
+    };
+
+    let cache = SESSION_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(cache_guard) = cache.lock() {
+        if let Some(cached) = cache_guard.as_ref() {
+            if cached.repo_path == current_repo_path
+                && cached.branch_name.as_deref() == branch_name
+                && cached.diff_source == diff_source
+            {
+                return Ok(Some((cached.session_path.clone(), cached.session.clone())));
+            }
+        }
+    }
+
     let reviews_dir = get_reviews_dir()?;
 
-    let repo_name = repo_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
-
-    let mut matching_sessions: Vec<_> = fs::read_dir(&reviews_dir)?
+    let mut session_files: Vec<_> = fs::read_dir(&reviews_dir)?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with(repo_name) && name.ends_with(".json"))
+            let path = entry.path();
+
+            if !path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                return false;
+            }
+
+            let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+                return false;
+            };
+
+            let Some(parts) = parse_session_filename(filename) else {
+                return true;
+            };
+
+            if parts.repo_fingerprint != current_fingerprint {
+                return false;
+            }
+
+            if parts.diff_source != current_diff_source {
+                return false;
+            }
+
+            true
         })
         .collect();
 
-    matching_sessions
-        .sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
+    session_files.sort_by(|a, b| {
+        let a_modified = a
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let b_modified = b
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
 
-    Ok(matching_sessions.first().map(|e| e.path()))
+        b_modified.cmp(&a_modified).then_with(|| a.file_name().cmp(&b.file_name()))
+    });
+
+    let mut legacy_candidate = None;
+
+    for entry in session_files {
+        let path = entry.path();
+        let Ok(session) = load_session(&path) else {
+            continue;
+        };
+
+        if normalize_repo_path(&session.repo_path) != current_repo_path {
+            continue;
+        }
+
+        if session.diff_source != diff_source {
+            continue;
+        }
+
+        let session_branch = session.branch_name.as_deref();
+        if session_branch == branch_name {
+            if branch_name.is_none() && session.base_commit != head_commit {
+                continue;
+            }
+
+            if let Ok(mut cache_guard) = cache.lock() {
+                *cache_guard = Some(CachedSession {
+                    repo_path: current_repo_path.clone(),
+                    branch_name: branch_name.map(|s| s.to_string()),
+                    diff_source,
+                    session_path: path.clone(),
+                    session: session.clone(),
+                });
+            }
+
+            return Ok(Some((path, session)));
+        }
+
+        let eligible_legacy = branch_name.is_some()
+            && legacy_candidate.is_none()
+            && session_branch.is_none()
+            && session.base_commit == head_commit;
+        if eligible_legacy {
+            legacy_candidate = Some((path, session));
+        }
+    }
+
+    if let Some((ref path, ref session)) = legacy_candidate {
+        if let Ok(mut cache_guard) = cache.lock() {
+            *cache_guard = Some(CachedSession {
+                repo_path: current_repo_path,
+                branch_name: branch_name.map(|s| s.to_string()),
+                diff_source,
+                session_path: path.clone(),
+                session: session.clone(),
+            });
+        }
+    }
+
+    Ok(legacy_candidate)
 }
 
 #[cfg(test)]
@@ -86,12 +303,107 @@ mod tests {
     use super::*;
     use crate::model::FileStatus;
     use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
 
     fn create_test_session() -> ReviewSession {
-        let mut session =
-            ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
+        let mut session = ReviewSession::new(
+            PathBuf::from("/tmp/test-repo"),
+            "abc1234def".to_string(),
+            Some("main".to_string()),
+            SessionDiffSource::WorkingTree,
+        );
+        session.add_file(PathBuf::from("src/main.rs"), FileStatus::Modified);   
+        session
+    }
+
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct TestReviewsDirGuard<'a> {
+        _lock: std::sync::MutexGuard<'a, ()>,
+        path: PathBuf,
+    }
+
+    impl Drop for TestReviewsDirGuard<'_> {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var("TUICR_REVIEWS_DIR");
+            }
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn with_test_reviews_dir() -> TestReviewsDirGuard<'static> {
+        let lock = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let path = std::env::temp_dir().join(format!("tuicr-reviews-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&path).unwrap();
+        unsafe {
+            std::env::set_var("TUICR_REVIEWS_DIR", path.as_os_str());
+        }
+
+        TestReviewsDirGuard { _lock: lock, path }
+    }
+
+    fn create_session(
+        repo_path: PathBuf,
+        base_commit: &str,
+        branch_name: Option<&str>,
+        diff_source: SessionDiffSource,
+    ) -> ReviewSession {
+        let mut session = ReviewSession::new(
+            repo_path,
+            base_commit.to_string(),
+            branch_name.map(|s| s.to_string()),
+            diff_source,
+        );
         session.add_file(PathBuf::from("src/main.rs"), FileStatus::Modified);
         session
+    }
+
+    fn save_legacy_session(reviews_dir: &Path, session: &ReviewSession) -> PathBuf {
+        let mut value = serde_json::to_value(session).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        obj.remove("branch_name");
+        obj.remove("diff_source");
+        obj.insert("version".to_string(), serde_json::Value::String("1.0".to_string()));
+
+        let id_fragment = session.id.split('-').next().unwrap_or(&session.id);
+        let path = reviews_dir.join(format!("legacy_{id_fragment}.json"));
+        fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        path
+    }
+
+    fn ensure_newer_mtime(newer: &Path, older: &Path) {
+        let older_time = fs::metadata(older)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+        for _ in 0..40 {
+            let newer_time = fs::metadata(newer)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+            if newer_time > older_time {
+                return;
+            }
+
+            std::thread::sleep(Duration::from_millis(100));
+            let contents = fs::read_to_string(newer).unwrap();
+            fs::write(newer, contents).unwrap();
+        }
+
+        let newer_time = fs::metadata(newer)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+        assert!(
+            newer_time > older_time,
+            "failed to produce newer mtime for {}",
+            newer.display()
+        );
     }
 
     #[test]
@@ -103,12 +415,15 @@ mod tests {
         let filename = session_filename(&session);
 
         // then
-        assert!(filename.starts_with("test-repo_abc1234_"));
+        assert!(filename.starts_with("test-repo_"));
+        assert!(filename.contains("_main_worktree_"));
         assert!(filename.ends_with(".json"));
     }
 
     #[test]
     fn should_roundtrip_session() {
+        let _guard = with_test_reviews_dir();
+
         // given
         let session = create_test_session();
 
@@ -119,9 +434,315 @@ mod tests {
         // then
         assert_eq!(session.id, loaded.id);
         assert_eq!(session.base_commit, loaded.base_commit);
+        assert_eq!(session.branch_name, loaded.branch_name);
+        assert_eq!(session.diff_source, loaded.diff_source);
         assert_eq!(session.files.len(), loaded.files.len());
 
         // cleanup
         let _ = delete_session(&path);
+    }
+
+    #[test]
+    fn should_sanitize_branch_name_in_filename() {
+        // given
+        let session = create_session(
+            PathBuf::from("/tmp/test-repo"),
+            "abc1234def",
+            Some("feature/login"),
+            SessionDiffSource::WorkingTree,
+        );
+
+        // when
+        let filename = session_filename(&session);
+
+        // then
+        assert!(!filename.contains('/'));
+        assert!(filename.contains("feature-login"));
+    }
+
+    #[test]
+    fn should_select_latest_session_for_branch() {
+        let _guard = with_test_reviews_dir();
+
+        // given
+        let repo_path = std::env::temp_dir().join(format!("tuicr-repo-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let session1 = create_session(
+            repo_path.clone(),
+            "commit-1",
+            Some("main"),
+            SessionDiffSource::WorkingTree,
+        );
+        let path1 = save_session(&session1).unwrap();
+
+        let session2 = create_session(
+            repo_path.clone(),
+            "commit-2",
+            Some("main"),
+            SessionDiffSource::WorkingTree,
+        );
+        let path2 = save_session(&session2).unwrap();
+        ensure_newer_mtime(&path2, &path1);
+
+        // when
+        let (selected_path, selected) = load_latest_session_for_context(
+            &repo_path,
+            Some("main"),
+            "head-does-not-matter-for-branch",
+            SessionDiffSource::WorkingTree,
+        )
+        .unwrap()
+        .unwrap();
+
+        // then
+        assert_eq!(selected_path, path2);
+        assert_ne!(selected_path, path1);
+        assert_eq!(selected.base_commit, "commit-2");
+    }
+
+    #[test]
+    fn should_match_branch_even_when_head_commit_differs() {
+        let _guard = with_test_reviews_dir();
+
+        // given
+        let repo_path = std::env::temp_dir().join(format!("tuicr-repo-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let session = create_session(
+            repo_path.clone(),
+            "old-head",
+            Some("main"),
+            SessionDiffSource::WorkingTree,
+        );
+        let _ = save_session(&session).unwrap();
+
+        // when
+        let loaded = load_latest_session_for_context(
+            &repo_path,
+            Some("main"),
+            "new-head",
+            SessionDiffSource::WorkingTree,
+        )
+        .unwrap();
+
+        // then
+        assert!(loaded.is_some());
+    }
+
+    #[test]
+    fn should_prefer_branch_match_over_legacy_candidate() {
+        let guard = with_test_reviews_dir();
+
+        // given
+        let repo_path = std::env::temp_dir().join(format!("tuicr-repo-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let branch_session = create_session(
+            repo_path.clone(),
+            "branch-base",
+            Some("main"),
+            SessionDiffSource::WorkingTree,
+        );
+        let branch_path = save_session(&branch_session).unwrap();
+
+        let legacy_source = create_session(
+            repo_path.clone(),
+            "head-commit",
+            None,
+            SessionDiffSource::WorkingTree,
+        );
+        let legacy_path = save_legacy_session(&guard.path, &legacy_source);
+
+        // when
+        let (selected_path, _selected) = load_latest_session_for_context(
+            &repo_path,
+            Some("main"),
+            "head-commit",
+            SessionDiffSource::WorkingTree,
+        )
+        .unwrap()
+        .unwrap();
+
+        // then
+        assert_eq!(selected_path, branch_path);
+        assert_ne!(selected_path, legacy_path);
+    }
+
+    #[test]
+    fn should_fallback_to_legacy_session_when_no_branch_session_exists() {
+        let guard = with_test_reviews_dir();
+
+        // given
+        let repo_path = std::env::temp_dir().join(format!("tuicr-repo-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let legacy_source = create_session(
+            repo_path.clone(),
+            "head-commit",
+            None,
+            SessionDiffSource::WorkingTree,
+        );
+        let legacy_path = save_legacy_session(&guard.path, &legacy_source);
+
+        // when
+        let (selected_path, selected) = load_latest_session_for_context(
+            &repo_path,
+            Some("main"),
+            "head-commit",
+            SessionDiffSource::WorkingTree,
+        )
+        .unwrap()
+        .unwrap();
+
+        // then
+        assert_eq!(selected_path, legacy_path);
+        assert_eq!(selected.branch_name, None);
+        assert_eq!(selected.diff_source, SessionDiffSource::WorkingTree);
+    }
+
+    #[test]
+    fn should_not_select_legacy_session_when_head_commit_differs() {
+        let guard = with_test_reviews_dir();
+
+        // given
+        let repo_path = std::env::temp_dir().join(format!("tuicr-repo-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let legacy_source = create_session(
+            repo_path.clone(),
+            "old-head",
+            None,
+            SessionDiffSource::WorkingTree,
+        );
+        let _legacy_path = save_legacy_session(&guard.path, &legacy_source);
+
+        // when
+        let loaded = load_latest_session_for_context(
+            &repo_path,
+            Some("main"),
+            "new-head",
+            SessionDiffSource::WorkingTree,
+        )
+        .unwrap();
+
+        // then
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn should_require_commit_match_in_detached_head() {
+        let _guard = with_test_reviews_dir();
+
+        // given
+        let repo_path = std::env::temp_dir().join(format!("tuicr-repo-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let session = create_session(
+            repo_path.clone(),
+            "detached-head",
+            None,
+            SessionDiffSource::WorkingTree,
+        );
+        let _ = save_session(&session).unwrap();
+
+        // when
+        let mismatch = load_latest_session_for_context(
+            &repo_path,
+            None,
+            "different-head",
+            SessionDiffSource::WorkingTree,
+        )
+        .unwrap();
+        let match_ = load_latest_session_for_context(
+            &repo_path,
+            None,
+            "detached-head",
+            SessionDiffSource::WorkingTree,
+        )
+        .unwrap();
+
+        // then
+        assert!(mismatch.is_none());
+        assert!(match_.is_some());
+    }
+
+    #[test]
+    fn should_ignore_sessions_with_different_diff_source() {
+        let _guard = with_test_reviews_dir();
+
+        // given
+        let repo_path = std::env::temp_dir().join(format!("tuicr-repo-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let commits_session = create_session(
+            repo_path.clone(),
+            "commit-2",
+            Some("main"),
+            SessionDiffSource::CommitRange,
+        );
+        let _ = save_session(&commits_session).unwrap();
+
+        // when
+        let worktree = load_latest_session_for_context(
+            &repo_path,
+            Some("main"),
+            "head",
+            SessionDiffSource::WorkingTree,
+        )
+        .unwrap();
+        let commits = load_latest_session_for_context(
+            &repo_path,
+            Some("main"),
+            "head",
+            SessionDiffSource::CommitRange,
+        )
+        .unwrap();
+
+        // then
+        assert!(worktree.is_none());
+        assert!(commits.is_some());
+    }
+
+    #[test]
+    fn should_disambiguate_repos_with_same_folder_name() {
+        let _guard = with_test_reviews_dir();
+
+        // given
+        let base = std::env::temp_dir().join(format!("tuicr-repos-{}", uuid::Uuid::new_v4()));
+        let repo_a = base.join("a").join("same-repo");
+        let repo_b = base.join("b").join("same-repo");
+        fs::create_dir_all(&repo_a).unwrap();
+        fs::create_dir_all(&repo_b).unwrap();
+
+        let session_a = create_session(
+            repo_a.clone(),
+            "head-a",
+            Some("main"),
+            SessionDiffSource::WorkingTree,
+        );
+        let _ = save_session(&session_a).unwrap();
+
+        let session_b = create_session(
+            repo_b.clone(),
+            "head-b",
+            Some("main"),
+            SessionDiffSource::WorkingTree,
+        );
+        let _ = save_session(&session_b).unwrap();
+
+        // when
+        let (_path, selected) = load_latest_session_for_context(
+            &repo_a,
+            Some("main"),
+            "head",
+            SessionDiffSource::WorkingTree,
+        )
+        .unwrap()
+        .unwrap();
+
+        // then
+        assert_eq!(selected.base_commit, "head-a");
+        assert_eq!(normalize_repo_path(&selected.repo_path), normalize_repo_path(&repo_a));
     }
 }
