@@ -41,15 +41,11 @@ impl FileReview {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SessionDiffSource {
+    #[default]
     WorkingTree,
     CommitRange,
-}
-
-impl Default for SessionDiffSource {
-    fn default() -> Self {
-        Self::WorkingTree
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -416,7 +416,12 @@ mod tests {
     fn should_export_single_line_range_as_single_line() {
         // given - a comment with a single-line range should display as L42, not L42-L42
         let mut session =
-            ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
+            ReviewSession::new(
+                PathBuf::from("/tmp/test-repo"),
+                "abc1234def".to_string(),
+                Some("main".to_string()),
+                SessionDiffSource::WorkingTree,
+            );
         session.add_file(PathBuf::from("src/main.rs"), FileStatus::Modified);
 
         if let Some(review) = session.get_file_mut(&PathBuf::from("src/main.rs")) {
@@ -445,7 +450,12 @@ mod tests {
     fn should_export_line_range_with_start_and_end() {
         // given - a comment spanning multiple lines
         let mut session =
-            ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
+            ReviewSession::new(
+                PathBuf::from("/tmp/test-repo"),
+                "abc1234def".to_string(),
+                Some("main".to_string()),
+                SessionDiffSource::WorkingTree,
+            );
         session.add_file(PathBuf::from("src/main.rs"), FileStatus::Modified);
 
         if let Some(review) = session.get_file_mut(&PathBuf::from("src/main.rs")) {
@@ -474,7 +484,12 @@ mod tests {
     fn should_export_old_side_line_range_with_tilde() {
         // given - a range comment on deleted lines (old side)
         let mut session =
-            ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
+            ReviewSession::new(
+                PathBuf::from("/tmp/test-repo"),
+                "abc1234def".to_string(),
+                Some("main".to_string()),
+                SessionDiffSource::WorkingTree,
+            );
         session.add_file(PathBuf::from("src/main.rs"), FileStatus::Modified);
 
         if let Some(review) = session.get_file_mut(&PathBuf::from("src/main.rs")) {
@@ -502,7 +517,12 @@ mod tests {
     fn should_export_single_old_side_line_with_tilde() {
         // given - a single line comment on a deleted line
         let mut session =
-            ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
+            ReviewSession::new(
+                PathBuf::from("/tmp/test-repo"),
+                "abc1234def".to_string(),
+                Some("main".to_string()),
+                SessionDiffSource::WorkingTree,
+            );
         session.add_file(PathBuf::from("src/main.rs"), FileStatus::Modified);
 
         if let Some(review) = session.get_file_mut(&PathBuf::from("src/main.rs")) {
@@ -531,7 +551,12 @@ mod tests {
     fn should_handle_comment_without_line_range_field() {
         // given - backward compatibility: comment without line_range uses line number
         let mut session =
-            ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
+            ReviewSession::new(
+                PathBuf::from("/tmp/test-repo"),
+                "abc1234def".to_string(),
+                Some("main".to_string()),
+                SessionDiffSource::WorkingTree,
+            );
         session.add_file(PathBuf::from("src/main.rs"), FileStatus::Modified);
 
         if let Some(review) = session.get_file_mut(&PathBuf::from("src/main.rs")) {

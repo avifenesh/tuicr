@@ -383,60 +383,20 @@ impl App {
         }
     }
 
-<<<<<<< HEAD
     fn load_or_create_session(vcs_info: &VcsInfo) -> ReviewSession {
-        match find_session_for_repo(&vcs_info.root_path) {
-            Ok(Some(path)) => match load_session(&path) {
-                Ok(s) => {
-                    // Delete stale session file if base commit doesn't match
-                    if s.base_commit != vcs_info.head_commit {
-                        let _ = std::fs::remove_file(&path);
-                        ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone())
-                    } else {
-                        s
-                    }
-                }
-                Err(_) => {
-                    ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone())
-                }
-            },
-            _ => ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone()),
-||||||| parent of acd5ca5 (feat: add multi-session and multi-repo support with performance optimizations)
-    fn load_or_create_session(repo_info: &RepoInfo) -> ReviewSession {
-        match find_session_for_repo(&repo_info.root_path) {
-            Ok(Some(path)) => match load_session(&path) {
-                Ok(s) => {
-                    // Delete stale session file if base commit doesn't match
-                    if s.base_commit != repo_info.head_commit {
-                        let _ = std::fs::remove_file(&path);
-                        ReviewSession::new(
-                            repo_info.root_path.clone(),
-                            repo_info.head_commit.clone(),
-                        )
-                    } else {
-                        s
-                    }
-                }
-                Err(_) => {
-                    ReviewSession::new(repo_info.root_path.clone(), repo_info.head_commit.clone())
-                }
-            },
-            _ => ReviewSession::new(repo_info.root_path.clone(), repo_info.head_commit.clone()),
-=======
-    fn load_or_create_session(repo_info: &RepoInfo) -> ReviewSession {
         let new_session = || {
             ReviewSession::new(
-                repo_info.root_path.clone(),
-                repo_info.head_commit.clone(),
-                repo_info.branch_name.clone(),
+                vcs_info.root_path.clone(),
+                vcs_info.head_commit.clone(),
+                vcs_info.branch_name.clone(),
                 SessionDiffSource::WorkingTree,
             )
         };
 
         let Ok(found) = load_latest_session_for_context(
-            &repo_info.root_path,
-            repo_info.branch_name.as_deref(),
-            &repo_info.head_commit,
+            &vcs_info.root_path,
+            vcs_info.branch_name.as_deref(),
+            &vcs_info.head_commit,
             SessionDiffSource::WorkingTree,
         ) else {
             return new_session();
@@ -447,14 +407,13 @@ impl App {
         };
 
         let mut updated = false;
-        if session.branch_name.is_none() && repo_info.branch_name.is_some() {
-            session.branch_name = repo_info.branch_name.clone();
+        if session.branch_name.is_none() && vcs_info.branch_name.is_some() {
+            session.branch_name = vcs_info.branch_name.clone();
             updated = true;
->>>>>>> acd5ca5 (feat: add multi-session and multi-repo support with performance optimizations)
         }
 
-        if repo_info.branch_name.is_some() && session.base_commit != repo_info.head_commit {
-            session.base_commit = repo_info.head_commit.clone();
+        if vcs_info.branch_name.is_some() && session.base_commit != vcs_info.head_commit {
+            session.base_commit = vcs_info.head_commit.clone();
             updated = true;
         }
 
@@ -1804,19 +1763,12 @@ impl App {
 
         // Update session with the newest commit as base
         let newest_commit_id = selected_ids.last().unwrap().clone();
-<<<<<<< HEAD
-        self.session =
-            ReviewSession::new(self.vcs_info.root_path.clone(), newest_commit_id.clone());
-||||||| parent of acd5ca5 (feat: add multi-session and multi-repo support with performance optimizations)
-        self.session = ReviewSession::new(self.repo_info.root_path.clone(), newest_commit_id);
-=======
         self.session = ReviewSession::new(
-            self.repo_info.root_path.clone(),
+            self.vcs_info.root_path.clone(),
             newest_commit_id,
-            self.repo_info.branch_name.clone(),
+            self.vcs_info.branch_name.clone(),
             SessionDiffSource::CommitRange,
         );
->>>>>>> acd5ca5 (feat: add multi-session and multi-repo support with performance optimizations)
 
         // Add files to session
         for file in &diff_files {

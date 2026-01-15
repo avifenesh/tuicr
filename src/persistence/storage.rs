@@ -171,15 +171,13 @@ pub fn load_latest_session_for_context(
             }
 
             // Delete sessions older than 7 days
-            if let Ok(metadata) = entry.metadata() {
-                if let Ok(modified) = metadata.modified() {
-                    if let Ok(age) = now.duration_since(modified) {
-                        if age > max_age {
-                            let _ = fs::remove_file(&path);
-                            return false;
-                        }
-                    }
-                }
+            if let Ok(metadata) = entry.metadata()
+                && let Ok(modified) = metadata.modified()
+                && let Ok(age) = now.duration_since(modified)
+                && age > max_age
+            {
+                let _ = fs::remove_file(&path);
+                return false;
             }
 
             let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
