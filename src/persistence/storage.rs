@@ -29,6 +29,13 @@ fn parse_session_filename(filename: &str) -> Option<SessionFilenameParts> {
 }
 
 fn get_reviews_dir() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = std::env::var_os("TUICR_REVIEWS_DIR") {
+        let path = PathBuf::from(dir);
+        fs::create_dir_all(&path)?;
+        return Ok(path);
+    }
+
     let proj_dirs = ProjectDirs::from("", "", "tuicr").ok_or_else(|| {
         TuicrError::Io(std::io::Error::other("Could not determine data directory"))
     })?;
@@ -259,7 +266,7 @@ mod tests {
     use crate::model::FileStatus;
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
-    use std::time::{Duration, SystemTime};
+    use std::time::Duration;
 
     fn create_test_session() -> ReviewSession {
         let mut session = ReviewSession::new(
