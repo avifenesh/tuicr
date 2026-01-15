@@ -84,12 +84,16 @@ fn delete_session(path: &PathBuf) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::FileStatus;
+    use crate::model::{FileStatus, SessionDiffSource};
     use std::path::PathBuf;
 
     fn create_test_session() -> ReviewSession {
-        let mut session =
-            ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
+        let mut session = ReviewSession::new(
+            PathBuf::from("/tmp/test-repo"),
+            "abc1234def".to_string(),
+            Some("main".to_string()),
+            SessionDiffSource::WorkingTree,
+        );
         session.add_file(PathBuf::from("src/main.rs"), FileStatus::Modified);
         session
     }

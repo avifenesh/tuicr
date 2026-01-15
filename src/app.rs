@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::error::{Result, TuicrError};
-use crate::model::{Comment, CommentType, DiffFile, DiffLine, LineRange, LineSide, ReviewSession};
+use crate::model::{
+    Comment, CommentType, DiffFile, DiffLine, LineRange, LineSide, ReviewSession,
+    SessionDiffSource,
+};
 use crate::persistence::{find_session_for_repo, load_session};
 use crate::theme::Theme;
 use crate::vcs::git::calculate_gap;
@@ -313,8 +316,12 @@ impl App {
                     return Err(TuicrError::NoChanges);
                 }
 
-                let session =
-                    ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone());
+                let session = ReviewSession::new(
+                    vcs_info.root_path.clone(),
+                    vcs_info.head_commit.clone(),
+                    vcs_info.branch_name.clone(),
+                    SessionDiffSource::WorkingTree,
+                );
 
                 Ok(Self {
                     theme,
@@ -368,16 +375,29 @@ impl App {
                     // Delete stale session file if base commit doesn't match
                     if s.base_commit != vcs_info.head_commit {
                         let _ = std::fs::remove_file(&path);
-                        ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone())
+                        ReviewSession::new(
+                            vcs_info.root_path.clone(),
+                            vcs_info.head_commit.clone(),
+                            vcs_info.branch_name.clone(),
+                            SessionDiffSource::WorkingTree,
+                        )
                     } else {
                         s
                     }
                 }
-                Err(_) => {
-                    ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone())
-                }
+                Err(_) => ReviewSession::new(
+                    vcs_info.root_path.clone(),
+                    vcs_info.head_commit.clone(),
+                    vcs_info.branch_name.clone(),
+                    SessionDiffSource::WorkingTree,
+                ),
             },
-            _ => ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone()),
+            _ => ReviewSession::new(
+                vcs_info.root_path.clone(),
+                vcs_info.head_commit.clone(),
+                vcs_info.branch_name.clone(),
+                SessionDiffSource::WorkingTree,
+            ),
         }
     }
 
@@ -1695,7 +1715,12 @@ impl App {
 
         // Update session with the newest commit as base
         let newest_commit_id = selected_ids.last().unwrap().clone();
-        self.session = ReviewSession::new(self.vcs_info.root_path.clone(), newest_commit_id);
+        self.session = ReviewSession::new(
+            self.vcs_info.root_path.clone(),
+            newest_commit_id,
+            self.vcs_info.branch_name.clone(),
+            SessionDiffSource::CommitRange,
+        );
 
         // Add files to session
         for file in &diff_files {
