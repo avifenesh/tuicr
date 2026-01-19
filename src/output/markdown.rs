@@ -173,16 +173,12 @@ fn generate_markdown(session: &ReviewSession, diff_source: &DiffSource) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Comment, CommentType, FileStatus, LineRange, LineSide, SessionDiffSource};
+    use crate::model::{Comment, CommentType, FileStatus, LineRange, LineSide};
     use std::path::PathBuf;
 
     fn create_test_session() -> ReviewSession {
-        let mut session = ReviewSession::new(
-            PathBuf::from("/tmp/test-repo"),
-            "abc1234def".to_string(),
-            Some("main".to_string()),
-            SessionDiffSource::WorkingTree,
-        );
+        let mut session =
+            ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
         session.add_file(PathBuf::from("src/main.rs"), FileStatus::Modified);
 
         // Add a file comment
@@ -244,12 +240,7 @@ mod tests {
     #[test]
     fn should_fail_export_when_no_comments() {
         // given
-        let session = ReviewSession::new(
-            PathBuf::from("/tmp/test-repo"),
-            "abc1234def".to_string(),
-            Some("main".to_string()),
-            SessionDiffSource::WorkingTree,
-        );
+        let session = ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
         let diff_source = DiffSource::WorkingTree;
 
         // when

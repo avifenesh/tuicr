@@ -2,11 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::error::{Result, TuicrError};
-use crate::model::{
-    Comment, CommentType, DiffFile, DiffLine, LineRange, LineSide, ReviewSession,
-    SessionDiffSource,
-};
-use crate::persistence::{find_session_for_commit, find_session_for_repo, load_session};
+use crate::model::{Comment, CommentType, DiffFile, DiffLine, LineRange, LineSide, ReviewSession};
+use crate::persistence::{find_session_for_repo, load_session};
 use crate::theme::Theme;
 use crate::vcs::git::calculate_gap;
 use crate::vcs::{CommitInfo, VcsBackend, VcsInfo, detect_vcs};
@@ -316,12 +313,8 @@ impl App {
                     return Err(TuicrError::NoChanges);
                 }
 
-                let session = ReviewSession::new(
-                    vcs_info.root_path.clone(),
-                    vcs_info.head_commit.clone(),
-                    vcs_info.branch_name.clone(),
-                    SessionDiffSource::WorkingTree,
-                );
+                let session =
+                    ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone());
 
                 Ok(Self {
                     theme,
@@ -375,29 +368,16 @@ impl App {
                     // Delete stale session file if base commit doesn't match
                     if s.base_commit != vcs_info.head_commit {
                         let _ = std::fs::remove_file(&path);
-                        ReviewSession::new(
-                            vcs_info.root_path.clone(),
-                            vcs_info.head_commit.clone(),
-                            vcs_info.branch_name.clone(),
-                            SessionDiffSource::WorkingTree,
-                        )
+                        ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone())
                     } else {
                         s
                     }
                 }
-                Err(_) => ReviewSession::new(
-                    vcs_info.root_path.clone(),
-                    vcs_info.head_commit.clone(),
-                    vcs_info.branch_name.clone(),
-                    SessionDiffSource::WorkingTree,
-                ),
+                Err(_) => {
+                    ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone())
+                }
             },
-            _ => ReviewSession::new(
-                vcs_info.root_path.clone(),
-                vcs_info.head_commit.clone(),
-                vcs_info.branch_name.clone(),
-                SessionDiffSource::WorkingTree,
-            ),
+            _ => ReviewSession::new(vcs_info.root_path.clone(), vcs_info.head_commit.clone()),
         }
     }
 
@@ -1563,7 +1543,7 @@ impl App {
     }
 
     pub fn enter_commit_select_mode(&mut self) -> Result<()> {
-        let commits = get_recent_commits(&self.repo_info.repo, 20)?;
+        let commits = self.vcs.get_recent_commits(20)?;
         if commits.is_empty() {
             self.set_message("No commits found");
             return Ok(());
@@ -1581,7 +1561,8 @@ impl App {
 
         // If we were viewing commits, try to go back to working tree
         if matches!(self.diff_source, DiffSource::CommitRange(_)) {
-            match get_working_tree_diff(&self.repo_info.repo) {
+            let highlighter = self.theme.syntax_highlighter();
+            match self.vcs.get_working_tree_diff(highlighter) {
                 Ok(diff_files) => {
                     self.diff_files = diff_files;
                     self.diff_source = DiffSource::WorkingTree;
@@ -1715,34 +1696,8 @@ impl App {
 
         // Update session with the newest commit as base
         let newest_commit_id = selected_ids.last().unwrap().clone();
-
-        // Try to load existing session for this commit range, or create new one
-        self.session = match find_session_for_commit(
-            &self.vcs_info.root_path,
-            &newest_commit_id,
-            SessionDiffSource::CommitRange,
-        ) {
-            Ok(Some(path)) => {
-                // Found matching session for this commit range
-                load_session(&path).unwrap_or_else(|_| {
-                    ReviewSession::new(
-                        self.vcs_info.root_path.clone(),
-                        newest_commit_id.clone(),
-                        self.vcs_info.branch_name.clone(),
-                        SessionDiffSource::CommitRange,
-                    )
-                })
-            }
-            _ => {
-                // No session found, create new one
-                ReviewSession::new(
-                    self.vcs_info.root_path.clone(),
-                    newest_commit_id.clone(),
-                    self.vcs_info.branch_name.clone(),
-                    SessionDiffSource::CommitRange,
-                )
-            }
-        };
+        self.session =
+            ReviewSession::new(self.vcs_info.root_path.clone(), newest_commit_id.clone());
 
         // Add files to session (only if they don't already exist)
         for file in &diff_files {

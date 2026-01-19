@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Result, TuicrError};
-use crate::model::{ReviewSession, SessionDiffSource};
+use crate::model::ReviewSession;
 
 fn get_reviews_dir() -> Result<PathBuf> {
     let proj_dirs = ProjectDirs::from("", "", "tuicr").ok_or_else(|| {
@@ -75,59 +75,6 @@ pub fn find_session_for_repo(repo_path: &Path) -> Result<Option<PathBuf>> {
     Ok(matching_sessions.first().map(|e| e.path()))
 }
 
-/// Find a session that matches the given repo, commit, and diff source
-pub fn find_session_for_commit(
-    repo_path: &Path,
-    base_commit: &str,
-    diff_source: SessionDiffSource,
-) -> Result<Option<PathBuf>> {
-    let reviews_dir = get_reviews_dir()?;
-
-    let repo_name = repo_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
-
-    let short_commit = if base_commit.len() >= 7 {
-        &base_commit[..7]
-    } else {
-        base_commit
-    };
-
-    // Collect matching files sorted by modification time (most recent first)
-    let mut matching_files: Vec<_> = fs::read_dir(&reviews_dir)?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            // Filter by filename pattern first (faster than loading files)
-            entry.file_name().to_str().is_some_and(|name| {
-                name.starts_with(repo_name)
-                    && name.contains(short_commit)
-                    && name.ends_with(".json")
-            })
-        })
-        .filter_map(|entry| {
-            let path = entry.path();
-            let modified = fs::metadata(&path).ok()?.modified().ok()?;
-            Some((path, modified))
-        })
-        .collect();
-
-    // Sort by modification time, most recent first
-    matching_files.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
-
-    // Load sessions in order and return first match
-    for (path, _) in matching_files {
-        if let Ok(session) = load_session(&path)
-            && session.base_commit == base_commit
-            && session.diff_source == diff_source
-        {
-            return Ok(Some(path));
-        }
-    }
-
-    Ok(None)
-}
-
 #[cfg(test)]
 fn delete_session(path: &PathBuf) -> Result<()> {
     fs::remove_file(path)?;
@@ -137,16 +84,12 @@ fn delete_session(path: &PathBuf) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{FileStatus, SessionDiffSource};
+    use crate::model::FileStatus;
     use std::path::PathBuf;
 
     fn create_test_session() -> ReviewSession {
-        let mut session = ReviewSession::new(
-            PathBuf::from("/tmp/test-repo"),
-            "abc1234def".to_string(),
-            Some("main".to_string()),
-            SessionDiffSource::WorkingTree,
-        );
+        let mut session =
+            ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
         session.add_file(PathBuf::from("src/main.rs"), FileStatus::Modified);
         session
     }

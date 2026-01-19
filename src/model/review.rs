@@ -39,25 +39,12 @@ impl FileReview {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(Default)]
-pub enum SessionDiffSource {
-    #[default]
-    WorkingTree,
-    CommitRange,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewSession {
     pub id: String,
     pub version: String,
     pub repo_path: PathBuf,
-    #[serde(default)]
-    pub branch_name: Option<String>,
     pub base_commit: String,
-    #[serde(default)]
-    pub diff_source: SessionDiffSource,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub files: HashMap<PathBuf, FileReview>,
@@ -65,20 +52,13 @@ pub struct ReviewSession {
 }
 
 impl ReviewSession {
-    pub fn new(
-        repo_path: PathBuf,
-        base_commit: String,
-        branch_name: Option<String>,
-        diff_source: SessionDiffSource,
-    ) -> Self {
+    pub fn new(repo_path: PathBuf, base_commit: String) -> Self {
         let now = Utc::now();
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            version: "1.1".to_string(),
+            version: "1.0".to_string(),
             repo_path,
-            branch_name,
             base_commit,
-            diff_source,
             created_at: now,
             updated_at: now,
             files: HashMap::new(),
