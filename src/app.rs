@@ -1699,7 +1699,7 @@ impl App {
         self.session =
             ReviewSession::new(self.vcs_info.root_path.clone(), newest_commit_id.clone());
 
-        // Add files to session (only if they don't already exist)
+        // Add files to session
         for file in &diff_files {
             let path = file.display_path().clone();
             self.session.add_file(path, file.status);
