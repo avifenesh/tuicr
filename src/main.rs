@@ -34,8 +34,6 @@ use handler::{
     handle_search_action, handle_visual_action,
 };
 use input::{Action, map_key_to_action};
-use output::markdown::export_to_clipboard;
-use persistence::storage::save_session;
 use theme::{parse_cli_args, resolve_theme};
 
 /// Timeout for the "press Ctrl+C again to exit" feature

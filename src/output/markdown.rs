@@ -301,7 +301,12 @@ mod tests {
     #[test]
     fn should_fail_generate_export_content_when_no_comments() {
         // given
-        let session = ReviewSession::new(PathBuf::from("/tmp/test-repo"), "abc1234def".to_string());
+        let session = ReviewSession::new(
+            PathBuf::from("/tmp/test-repo"),
+            "abc1234def".to_string(),
+            Some("main".to_string()),
+            SessionDiffSource::WorkingTree,
+        );
         let diff_source = DiffSource::WorkingTree;
 
         // when

@@ -46,10 +46,8 @@ fn parse_session_filename(filename: &str) -> Option<SessionFilenameParts> {
 
     let mut fingerprints = Vec::new();
     for part in &parts[..diff_source_idx] {
-        if is_hex_fingerprint(part) {
-            if !fingerprints.iter().any(|candidate| candidate == part) {
-                fingerprints.push((*part).to_string());
-            }
+        if is_hex_fingerprint(part) && !fingerprints.iter().any(|candidate| candidate == part) {
+            fingerprints.push((*part).to_string());
         }
     }
 
