@@ -10,6 +10,9 @@ use crate::theme::Theme;
 use crate::vcs::git::calculate_gap;
 use crate::vcs::{CommitInfo, VcsBackend, VcsInfo, detect_vcs};
 
+const VISIBLE_COMMIT_COUNT: usize = 10;
+const COMMIT_PAGE_SIZE: usize = 10;
+
 #[derive(Debug, Clone)]
 pub enum FileTreeItem {
     Directory {
@@ -146,9 +149,15 @@ pub struct App {
     // Commit selection state
     pub commit_list: Vec<CommitInfo>,
     pub commit_list_cursor: usize,
+    pub commit_list_scroll_offset: usize,
+    pub commit_list_viewport_height: usize,
     /// Selected commit range as (start_idx, end_idx) inclusive, where start <= end.
     /// Indices refer to positions in commit_list (0 = newest/HEAD, higher = older).
     pub commit_selection_range: Option<(usize, usize)>,
+    /// State describing how many commits are currently shown and how pagination behaves.
+    pub visible_commit_count: usize,
+    pub commit_page_size: usize,
+    pub has_more_commit: bool,
 
     pub should_quit: bool,
     pub dirty: bool,
@@ -301,7 +310,12 @@ impl App {
                     comment_line_range: None,
                     commit_list: Vec::new(),
                     commit_list_cursor: 0,
+                    commit_list_scroll_offset: 0,
+                    commit_list_viewport_height: 0,
                     commit_selection_range: None,
+                    visible_commit_count: VISIBLE_COMMIT_COUNT,
+                    commit_page_size: COMMIT_PAGE_SIZE,
+                    has_more_commit: true,
                     should_quit: false,
                     dirty: false,
                     quit_warned: false,
@@ -326,10 +340,14 @@ impl App {
             }
             Err(TuicrError::NoChanges) => {
                 // No unstaged changes - try to get recent commits
-                let commits = vcs.get_recent_commits(5)?;
+                let commits = vcs.get_recent_commits(0, VISIBLE_COMMIT_COUNT)?;
                 if commits.is_empty() {
                     return Err(TuicrError::NoChanges);
                 }
+
+                // Check if there might be more commits (if we got exactly the page size)
+                let has_more_commit = commits.len() >= VISIBLE_COMMIT_COUNT;
+                let commit_count = commits.len();
 
                 let session = ReviewSession::new(
                     vcs_info.root_path.clone(),
@@ -364,7 +382,12 @@ impl App {
                     comment_line_range: None,
                     commit_list: commits,
                     commit_list_cursor: 0,
+                    commit_list_scroll_offset: 0,
+                    commit_list_viewport_height: 0,
                     commit_selection_range: None,
+                    visible_commit_count: commit_count,
+                    commit_page_size: COMMIT_PAGE_SIZE,
+                    has_more_commit,
                     should_quit: false,
                     dirty: false,
                     quit_warned: false,
@@ -1615,15 +1638,19 @@ impl App {
     }
 
     pub fn enter_commit_select_mode(&mut self) -> Result<()> {
-        let commits = self.vcs.get_recent_commits(20)?;
+        let commits = self.vcs.get_recent_commits(0, VISIBLE_COMMIT_COUNT)?;
         if commits.is_empty() {
             self.set_message("No commits found");
             return Ok(());
         }
 
+        // Check if there might be more commits
+        self.has_more_commit = commits.len() >= VISIBLE_COMMIT_COUNT;
         self.commit_list = commits;
         self.commit_list_cursor = 0;
+        self.commit_list_scroll_offset = 0;
         self.commit_selection_range = None;
+        self.visible_commit_count = self.commit_list.len();
         self.input_mode = InputMode::CommitSelect;
         Ok(())
     }
@@ -1684,13 +1711,75 @@ impl App {
     pub fn commit_select_up(&mut self) {
         if self.commit_list_cursor > 0 {
             self.commit_list_cursor -= 1;
+            // Scroll up if cursor goes above visible area
+            if self.commit_list_cursor < self.commit_list_scroll_offset {
+                self.commit_list_scroll_offset = self.commit_list_cursor;
+            }
         }
     }
 
     pub fn commit_select_down(&mut self) {
-        if self.commit_list_cursor < self.commit_list.len().saturating_sub(1) {
+        let max_cursor = if self.can_show_more_commits() {
+            self.visible_commit_count
+        } else {
+            self.visible_commit_count.saturating_sub(1)
+        };
+
+        if self.commit_list_cursor < max_cursor {
             self.commit_list_cursor += 1;
+            // Scroll down if cursor goes below visible area
+            if self.commit_list_viewport_height > 0
+                && self.commit_list_cursor
+                    >= self.commit_list_scroll_offset + self.commit_list_viewport_height
+            {
+                self.commit_list_scroll_offset =
+                    self.commit_list_cursor - self.commit_list_viewport_height + 1;
+            }
         }
+    }
+
+    // Check if cursor is on the commit expand row
+    pub fn is_on_expand_row(&self) -> bool {
+        self.can_show_more_commits() && self.commit_list_cursor == self.visible_commit_count
+    }
+
+    pub fn can_show_more_commits(&self) -> bool {
+        self.visible_commit_count < self.commit_list.len() || self.has_more_commit
+    }
+
+    // Expand the commit list to show more commits
+    pub fn expand_commit(&mut self) -> Result<()> {
+        if self.visible_commit_count < self.commit_list.len() {
+            self.visible_commit_count =
+                (self.visible_commit_count + self.commit_page_size).min(self.commit_list.len());
+            return Ok(());
+        }
+
+        if !self.has_more_commit {
+            self.set_message("No more commits");
+            return Ok(());
+        }
+
+        let offset = self.commit_list.len();
+        let limit = self.commit_page_size;
+
+        let new_commits = self.vcs.get_recent_commits(offset, limit)?;
+
+        if new_commits.is_empty() {
+            self.has_more_commit = false;
+            self.set_message("No more commits");
+            return Ok(());
+        }
+
+        if new_commits.len() < limit {
+            self.has_more_commit = false;
+            self.set_message("No more commits");
+        }
+
+        self.commit_list.extend(new_commits);
+        self.visible_commit_count = self.commit_list.len();
+
+        Ok(())
     }
 
     pub fn toggle_commit_selection(&mut self) {
